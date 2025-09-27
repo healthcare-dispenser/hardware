@@ -32,12 +32,11 @@ def build_register_payload(uuid: str | None = None) -> dict:
 
 def build_command_response(command_uuid: str, status: str, uuid: str | None = None, complteAt: str | None = None) -> dict:
     # status: "SUCCESS" | "FAIL"
-    # 필드명은 백 스펙대로 'complteAt' 유지
     return {
         "uuid": (uuid or DEVICE_UUID),
         "commandUuid": command_uuid,
         "status": status,
-        "complteAt": complteAt or now_iso(),
+        "completedAt": complteAt or now_iso(),
     }
 
 # ── 명령 파싱 유틸(백에서 'magnesum' 오타 대응) ─────────────
