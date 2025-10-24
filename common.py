@@ -36,7 +36,7 @@ def build_command_response(command_uuid: str, status: str, uuid: str | None = No
         "uuid": (uuid or DEVICE_UUID),
         "commandUuid": command_uuid,
         "status": status,
-        "completedAt": complteAt or now_iso(),
+        # "completedAt": complteAt or now_iso(),
     }
 
 # ── 명령 파싱 유틸(백에서 'magnesum' 오타 대응) ─────────────

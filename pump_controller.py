@@ -1,80 +1,110 @@
 # pump_controller.py
 """
-액상형 전용 펌프 제어 레이어 (시뮬레이션 버전)
-- 실제 GPIO 제어 없이 로그만 출력하고 True/False 반환
-- 다음 단계에서 RPi GPIO 붙일 예정
+액상펌프 제어 (라즈베리파이 GPIO 릴레이 구동 버전)
+- 시뮬 아닌 실제 GPIO 제어
+- 펌프 1회(unit)당 동작 시간(sec_per_unit) 기반으로 릴레이 ON/OFF
+- 릴레이 Active-Low(LOW=ON) 기준. 필요시 ACTIVE_LOW=False로 변경
 """
 
 from dataclasses import dataclass
 import logging
 import time
+from typing import Dict
+
+import RPi.GPIO as GPIO  # 라즈베리파이에서 실행
 
 log = logging.getLogger("pump")
 if not log.handlers:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
 
-# 1 단위 = 펌프 1회 가동이라고 가정 (초저비용 방식)
-# 나중에 보정 필요하면 PUMP_TABLE의 rate만 수정하면 됨.
+# ===== 릴레이/핀 설정 =====
+ACTIVE_LOW = True        # 대부분의 릴레이 보드는 LOW=ON
+GPIO.setmode(GPIO.BCM)   # BCM 번호 체계 사용
+GPIO.setwarnings(False)
+
+# 채널명 ↔ GPIO 핀 매핑 (실제 배선에 맞게 필요시 숫자만 바꾸면 됨)
+PUMP_PINS: Dict[str, int] = {
+    "vitamin":     17,   # GPIO17
+    "melatonin":   27,   # GPIO27
+    "magnesium":   22,   # GPIO22
+    "electrolyte": 23,   # GPIO23
+}
+
+for pin in PUMP_PINS.values():
+    GPIO.setup(pin, GPIO.OUT, initial=GPIO.HIGH if ACTIVE_LOW else GPIO.LOW)
+
+def _relay_on(pin: int):
+    GPIO.output(pin, GPIO.LOW if ACTIVE_LOW else GPIO.HIGH)
+
+def _relay_off(pin: int):
+    GPIO.output(pin, GPIO.HIGH if ACTIVE_LOW else GPIO.LOW)
+
+# ===== 펌프 사양(가정치) =====
 @dataclass
 class PumpSpec:
     name: str
-    rate_ml_per_unit: float = 1.0   # 펌프 1회(1 unit)당 mL (가정값)
-    sec_per_unit: float = 0.4       # 펌프 1회 동작 시간(초) (가정값)
+    rate_mL_per_unit: float  # 1 unit 당 mL (설명용, 제어는 시간 기반)
+    sec_per_unit: float      # 1 unit 동작 시간(초)
 
-# 채널별(영양소별) 펌프 스펙 — 값은 가정, 하드웨어 보정 때 수정
-PUMP_TABLE: dict[str, PumpSpec] = {
-    "vitamin":    PumpSpec("vitamin",    rate_ml_per_unit=1.0, sec_per_unit=0.40),
-    "melatonin":  PumpSpec("melatonin",  rate_ml_per_unit=0.5, sec_per_unit=0.35),
-    "magnesium":  PumpSpec("magnesium",  rate_ml_per_unit=1.0, sec_per_unit=0.45),
-    "electrolyte":PumpSpec("electrolyte",rate_ml_per_unit=1.2, sec_per_unit=0.50),
+# 하드웨어 보정 시 아래 값만 조정
+PUMP_TABLE: Dict[str, PumpSpec] = {
+    "vitamin":     PumpSpec("vitamin",     rate_mL_per_unit=1.0, sec_per_unit=0.40),
+    "melatonin":   PumpSpec("melatonin",   rate_mL_per_unit=0.5, sec_per_unit=0.35),
+    "magnesium":   PumpSpec("magnesium",   rate_mL_per_unit=1.0, sec_per_unit=0.45),
+    "electrolyte": PumpSpec("electrolyte", rate_mL_per_unit=1.2, sec_per_unit=0.50),
 }
 
-def _run_pump_sim(channel: str, units: int) -> None:
-    """실제 GPIO 없이 시간만 기다리는 시뮬레이션."""
+def _run_pump_real(channel: str, units: int) -> None:
+    """지정 채널 펌프를 units 만큼 동작 (시간 = units * sec_per_unit)"""
+    if channel not in PUMP_TABLE:
+        log.error(f"알 수 없는 채널: {channel}")
+        return
+    if channel not in PUMP_PINS:
+        log.error(f"핀 매핑이 없는 채널: {channel}")
+        return
+    if units <= 0:
+        return
+
     spec = PUMP_TABLE[channel]
-    duration = units * spec.sec_per_unit
-    log.info(f"[SIM] {channel:11s} | units={units:3d} | ~{duration:.2f}s 동작")
-    time.sleep(min(duration, 0.2))  # 로컬 테스트는 너무 오래 기다리지 않게 상한
+    pin = PUMP_PINS[channel]
+    duration = max(0.0, units * spec.sec_per_unit)
+
+    log.info(f"[REAL] {channel:10s} | units={units:3d} | ~{duration:.2f}s 동작")
+    _relay_on(pin)
+    try:
+        time.sleep(duration)
+    finally:
+        _relay_off(pin)
 
 def execute_mix(cmd: dict) -> bool:
     """
-    cmd = {
-      "commandUuid": "...",
-      "vitamin": int, "melatonin": int, "magnesium": int, "electrolyte": int
-    }
-    반환: True(성공) / False(실패)
+    서버에서 받은 명령 딕셔너리로 액상 배합 실행
+    기대 키: commandUuid, vitamin, melatonin, magnesium, electrolyte
+    성공 시 True, 실패 시 False
     """
     try:
-        # 유효성 검사
         channels = ["vitamin", "melatonin", "magnesium", "electrolyte"]
-        # 음수 방지 및 타입 정리
-        amounts: dict[str, int] = {}
+
+        # 유효성 점검 + 총 유닛 계산 (로그용)
         total_units = 0
         for ch in channels:
-            v_raw = cmd.get(ch, 0)
-            v = int(v_raw) if v_raw is not None else 0
-            if v < 0:
-                v = 0
-            amounts[ch] = v
-            total_units += v
-
-        if total_units == 0:
-            log.info("모든 채널이 0 → 실행할 펌프 없음 (성공 처리)")
-            return True
-
-        # 채널별 순차 구동(동시에 안 돌리는 보수적 방식)
-        for ch in channels:
-            units = amounts[ch]
-            if units <= 0:
-                continue
-            if ch not in PUMP_TABLE:
-                log.error(f"정의되지 않은 채널: {ch}")
+            val = int(cmd.get(ch, 0) or 0)
+            if val < 0:
+                log.error(f"{ch} 값이 음수임: {val}")
                 return False
-            _run_pump_sim(ch, units)
+            total_units += val
+        log.info(f"배합 시작 | total_units={total_units} | cmdUuid={cmd.get('commandUuid')}")
 
-        log.info("믹싱 완료 (SIM)")
+        # 채널별 순차 구동
+        for ch in channels:
+            units = int(cmd.get(ch, 0) or 0)
+            if units > 0:
+                _run_pump_real(ch, units)
+
+        log.info("배합 완료")
         return True
 
     except Exception as e:
-        log.exception(f"execute_mix 실패: {e}")
+        log.exception(f"배합 실패: {e}")
         return False
+
