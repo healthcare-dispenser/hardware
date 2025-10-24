@@ -4,9 +4,15 @@ import logging
 import paho.mqtt.client as mqtt
 
 from common import (
-    BROKER_HOST, BROKER_PORT, DEVICE_UUID,
-    topics, build_register_payload, build_command_response
+    DEVICE_UUID,
+    topics,
+    build_register_payload,
+    build_command_response,
 )
+
+# 🔁 새 MQTT 브로커 주소
+BROKER_HOST = "13.209.96.224"
+BROKER_PORT = 1883
 
 log = logging.getLogger("publisher")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
@@ -24,7 +30,7 @@ def publish_register(client: mqtt.Client):
 def publish_command_response(client: mqtt.Client, command_uuid: str, status: str):
     """
     status: 'SUCCESS' or 'FAIL'
-    필드명은 백엔드 규격대로 complteAt 사용
+    필드명은 백엔드 규격대로 completeAt 사용
     """
     t = topics()
     payload = build_command_response(command_uuid, status)
@@ -39,6 +45,7 @@ if __name__ == "__main__":
     client.loop_start()
     publish_register(client)
     # 잠깐 대기 후 종료(테스트용)
-    import time; time.sleep(1.5)
+    import time
+    time.sleep(1.5)
     client.loop_stop()
     client.disconnect()
