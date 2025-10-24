@@ -1,80 +1,113 @@
-# pump_controller.py
-"""
-액상형 전용 펌프 제어 레이어 (시뮬레이션 버전)
-- 실제 GPIO 제어 없이 로그만 출력하고 True/False 반환
-- 다음 단계에서 RPi GPIO 붙일 예정
-"""
+# healthcare-dispenser/hardware/.../pump_controller.py
 
-from dataclasses import dataclass
 import logging
 import time
+from dataclasses import dataclass
+import RPi.GPIO as GPIO # RPi.GPIO 모듈 추가
 
 log = logging.getLogger("pump")
 if not log.handlers:
+    # 로깅 설정: RPi에서 실행할 때 콘솔에 로그가 출력되도록 설정
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
 
-# 1 단위 = 펌프 1회 가동이라고 가정 (초저비용 방식)
-# 나중에 보정 필요하면 PUMP_TABLE의 rate만 수정하면 됨.
+# 1. GPIO 핀 설정 (pinmap.md 기반)
+# 라즈베리파이 GPIO 핀 번호와 영양제 채널 매핑
+PUMP_PINS = {
+    # 릴레이는 Active Low(LOW 신호 시 ON)로 가정하고 배선됨
+    "vitamin": 17,    # GPIO17 → Relay IN1 (라인1)
+    "melatonin": 27,  # GPIO27 → Relay IN2 (라인2)
+    "magnesium": 22,  # GPIO22 → Relay IN3 (라인3)
+    "electrolyte": 23, # GPIO23 → Relay IN4 (라인4)
+}
+
+# 2. GPIO 초기화 및 정리 함수
+def init_gpio():
+    """펌프 구동을 위해 GPIO를 설정하고 핀을 HIGH(OFF) 상태로 초기화합니다."""
+    # 펌프 구동 직전에 호출
+    GPIO.setmode(GPIO.BCM)
+    for pin in PUMP_PINS.values():
+        GPIO.setup(pin, GPIO.OUT)
+        # 릴레이 OFF 상태 유지 (Active Low 가정)
+        GPIO.output(pin, GPIO.HIGH)
+    log.info("GPIO setup complete: Pumps are OFF")
+
+def cleanup_gpio():
+    """펌프 구동 후 GPIO를 정리하여 핀 상태를 해제합니다."""
+    # 펌프 구동 후 항상 호출
+    GPIO.cleanup()
+    log.info("GPIO cleanup complete")
+
+
 @dataclass
 class PumpSpec:
     name: str
-    rate_ml_per_unit: float = 1.0   # 펌프 1회(1 unit)당 mL (가정값)
-    sec_per_unit: float = 0.4       # 펌프 1회 동작 시간(초) (가정값)
+    # ★★★ 핵심 보정값: 1mL 배출에 필요한 시간(초). 실험 후 이 값을 수정해야 합니다. ★★★
+    # 이 값이 정확해야 정량 배출 목표(±10%)를 달성할 수 있습니다. (현재는 예시값)
+    sec_per_ml: float = 0.40 
 
-# 채널별(영양소별) 펌프 스펙 — 값은 가정, 하드웨어 보정 때 수정
+# 채널별(영양소별) 펌프 스펙 — 실제 보정값을 측정하여 이 값을 반드시 수정해야 합니다.
 PUMP_TABLE: dict[str, PumpSpec] = {
-    "vitamin":    PumpSpec("vitamin",    rate_ml_per_unit=1.0, sec_per_unit=0.40),
-    "melatonin":  PumpSpec("melatonin",  rate_ml_per_unit=0.5, sec_per_unit=0.35),
-    "magnesium":  PumpSpec("magnesium",  rate_ml_per_unit=1.0, sec_per_unit=0.45),
-    "electrolyte":PumpSpec("electrolyte",rate_ml_per_unit=1.2, sec_per_unit=0.50),
+    "vitamin":    PumpSpec("vitamin",   sec_per_ml=0.40),
+    "melatonin":  PumpSpec("melatonin", sec_per_ml=0.70), # 멜라토닌이 점성이 높을 경우 시간이 더 걸릴 수 있음
+    "magnesium":  PumpSpec("magnesium", sec_per_ml=0.45),
+    "electrolyte":PumpSpec("electrolyte",sec_per_ml=0.42),
 }
 
-def _run_pump_sim(channel: str, units: int) -> None:
-    """실제 GPIO 없이 시간만 기다리는 시뮬레이션."""
-    spec = PUMP_TABLE[channel]
-    duration = units * spec.sec_per_unit
-    log.info(f"[SIM] {channel:11s} | units={units:3d} | ~{duration:.2f}s 동작")
-    time.sleep(min(duration, 0.2))  # 로컬 테스트는 너무 오래 기다리지 않게 상한
+
+def _run_pump_gpio(channel: str, duration: float) -> None:
+    """실제 GPIO 제어를 통해 펌프를 지정된 시간(초) 동안 구동합니다."""
+    if duration <= 0: return
+
+    pin = PUMP_PINS[channel]
+    
+    # 릴레이 ON (Active Low 가정: LOW 신호 시 ON)
+    GPIO.output(pin, GPIO.LOW)
+    log.info(f"[GPIO] {channel:11s} | PIN={pin} | {duration:.2f}s 동작 시작")
+    time.sleep(duration) # 펌프 구동
+    # 릴레이 OFF
+    GPIO.output(pin, GPIO.HIGH)
+    log.info(f"[GPIO] {channel:11s} | PIN={pin} | 동작 완료")
+
 
 def execute_mix(cmd: dict) -> bool:
     """
-    cmd = {
-      "commandUuid": "...",
-      "vitamin": int, "melatonin": int, "magnesium": int, "electrolyte": int
-    }
-    반환: True(성공) / False(실패)
+    서버 명령 페이로드를 해석하여 펌프 제어를 실행합니다.
+    cmd의 값은 배출할 용량(mL)이라고 가정합니다.
     """
+    init_gpio() # 펌프 구동 직전에 GPIO 초기화
+    
     try:
-        # 유효성 검사
+        # 백엔드 팀의 명령 구조 (common.py의 parse_command_payload와 일치)
         channels = ["vitamin", "melatonin", "magnesium", "electrolyte"]
-        # 음수 방지 및 타입 정리
-        amounts: dict[str, int] = {}
-        total_units = 0
+        total_duration = 0.0
+
         for ch in channels:
             v_raw = cmd.get(ch, 0)
-            v = int(v_raw) if v_raw is not None else 0
-            if v < 0:
-                v = 0
-            amounts[ch] = v
-            total_units += v
+            try:
+                # ★★★ 로직 오류 수정: float()으로 변환하여 정밀도(소수점)를 유지합니다. ★★★
+                volume_ml = float(v_raw) if v_raw is not None else 0.0
+            except (ValueError, TypeError):
+                volume_ml = 0.0
 
-        if total_units == 0:
-            log.info("모든 채널이 0 → 실행할 펌프 없음 (성공 처리)")
-            return True
+            volume_ml = max(0.0, volume_ml) # 음수 방지
 
-        # 채널별 순차 구동(동시에 안 돌리는 보수적 방식)
-        for ch in channels:
-            units = amounts[ch]
-            if units <= 0:
-                continue
-            if ch not in PUMP_TABLE:
-                log.error(f"정의되지 않은 채널: {ch}")
-                return False
-            _run_pump_sim(ch, units)
+            if volume_ml > 0.0 and ch in PUMP_TABLE: # 0.0 초과인 경우만 실행
+                spec = PUMP_TABLE[ch]
+                duration = volume_ml * spec.sec_per_ml # 필요한 구동 시간(초) 계산
+                total_duration += duration
+                
+                # 채널별 순차 구동
+                _run_pump_gpio(ch, duration) # 실제 GPIO 구동
+                time.sleep(0.15) # 펌프 구동 사이의 간격 (모터 안정화/액체 이동 대기)
 
-        log.info("믹싱 완료 (SIM)")
+        if total_duration == 0.0:
+            log.info("모든 채널이 0.0 → 실행할 펌프 없음 (성공 처리)")
+
+        log.info("믹싱 완료 (GPIO)")
         return True
 
     except Exception as e:
         log.exception(f"execute_mix 실패: {e}")
         return False
+    finally:
+        cleanup_gpio() # 펌프 구동 후 GPIO 정리
