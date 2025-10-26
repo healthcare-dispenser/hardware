@@ -3,26 +3,21 @@ import os
 from datetime import datetime, timezone
 from dotenv import load_dotenv
 
-# .env 로드
+# 환경 변수 로드 (.env)
 load_dotenv()
 
-# 브로커/서버 기본 설정
 BROKER_HOST = os.getenv("BROKER_HOST", "13.209.96.224")
 BROKER_PORT = int(os.getenv("BROKER_PORT", "1883"))
 
-# 디스펜서 고유 UUID (앱/서버가 이 값으로 이 기기를 인식함)
+# 라즈베리파이(디스펜서) 고유 ID
 DEVICE_UUID = os.getenv("DEVICE_UUID", "dispenser-001")
 
+
 def topic_base(uuid: str | None = None) -> str:
-    """토픽 prefix: dispenser/<uuid>"""
     return f"dispenser/{(uuid or DEVICE_UUID)}"
 
+
 def topics(uuid: str | None = None) -> dict:
-    """
-    서버/라즈파이 간 MQTT 통신에 쓰는 모든 토픽들.
-    pub_* = 라즈파이가 발행하는 쪽
-    sub_* = 라즈파이가 구독하는 쪽
-    """
     base = topic_base(uuid)
     return {
         "pub_register":       f"{base}/register",
@@ -31,15 +26,16 @@ def topics(uuid: str | None = None) -> dict:
         "sub_command":        f"{base}/command",
     }
 
+
 def now_iso() -> str:
-    """현재 시각을 ISO8601 문자열로 (초 단위까지)"""
     return datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
 
+
 def build_register_payload(uuid: str | None = None) -> dict:
-    """라즈베리파이가 '나 이 uuid 기기야' 하고 서버에 보내는 등록 페이로드"""
     return {
         "uuid": (uuid or DEVICE_UUID)
     }
+
 
 def build_command_response(
     command_uuid: str,
@@ -47,11 +43,6 @@ def build_command_response(
     uuid: str | None = None,
     complteAt: str | None = None,
 ) -> dict:
-    """
-    서버 명령 실행 결과를 서버한테 알려줄 때 쓰는 페이로드
-    status: "SUCCESS" 또는 "FAIL"
-    completedAt/complteAt 규격은 서버팀이 필요하면 추가 가능
-    """
     return {
         "uuid": (uuid or DEVICE_UUID),
         "commandUuid": command_uuid,
@@ -59,15 +50,21 @@ def build_command_response(
         # "completedAt": complteAt or now_iso(),
     }
 
+
 def parse_command_payload(d: dict) -> dict:
     """
-    서버에서 내려온 raw 명령(JSON)을 우리가 쓰기 편한 dict 형태로 정리.
-    혹시 서버에서 magnesium을 'magnesum' 오타로 보낼 수도 있으니까 그것도 커버.
+    서버가 내려주는 명령 JSON을 라즈에서 쓰기 좋은 형태로 정리.
+    서버 측 키 기준:
+      - zinc (아연)
+      - magnesium (마그네슘)
+      - electrolyte (전해질)
+      - melatonin (멜라토닌)
+    단위는 mg 라고 가정.
     """
     return {
         "commandUuid": d.get("commandUuid"),
-        "vitamin": d.get("vitamin", 0),
-        "melatonin": d.get("melatonin", 0),
+        "zinc": d.get("zinc", 0),
         "magnesium": d.get("magnesium", d.get("magnesum", 0)),
         "electrolyte": d.get("electrolyte", 0),
+        "melatonin": d.get("melatonin", 0),
     }
