@@ -1,7 +1,7 @@
-# 충돌이 발생한 파일을 백업합니다. (혹시 모를 원격 변경 사항 확인용)
-cp pump_controller.py pump_controller_CONFLICT_BACKUP.py
+# 프로젝트 폴더로 이동 (경로가 다르면 수정하세요)
+cd /home/b2o3/hardware 
 
-# 새로운(충돌이 해결된) 내용을 pump_controller.py에 덮어씁니다.
+# 새로운(오류가 제거된) 내용을 pump_controller.py에 덮어씁니다.
 cat << 'EOF' > pump_controller.py
 # pump_controller.py
 
