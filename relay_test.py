@@ -3,8 +3,7 @@ import time
 import RPi.GPIO as GPIO
 
 PINS = [17, 27, 22, 23]   # IN1..IN4에 연결한 GPIO
-
-ACTIVE_LOW = True         # 릴레이가 LOW에서 켜지면 True, HIGH에서 켜지면 False
+ACTIVE_LOW = True         # 릴레이가 LOW에서 켜지면 True
 
 GPIO.setmode(GPIO.BCM)
 for p in PINS:
