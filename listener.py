@@ -4,7 +4,7 @@ cat << 'EOF' > listener.py
 import json
 import logging
 import paho.mqtt.client as mqtt
-from pump_controller import execute_mix
+from pump_controller import execute_mix, execute_wash # execute_wash 함수 추가
 
 # 🔄 서버/브로커 설정
 from common import (
@@ -51,28 +51,42 @@ def on_message(client: mqtt.Client, userdata, msg: mqtt.MQTTMessage):
 
     # 1) 서버가 등록 응답 준 경우
     if topic == t["sub_register_resp"]:
-        # 예: { "uuid": "...", "status": "SUCCESS" }
         log.info(f"Register response: {data}")
 
-    # 2) 서버가 '이 조합대로 펌프 돌려'라고 명령 내린 경우
+    # 2) 서버가 '이 조합대로 펌프 돌려' 또는 '세척해'라고 명령 내린 경우
     elif topic == t["sub_command"]:
         cmd = parse_command_payload(data)
 
         command_uuid = cmd.get("commandUuid")
+        command_type = cmd.get("commandType", "DISPENSE") # 명령 유형을 확인
+        
         if not command_uuid:
             log.error("commandUuid missing")
             return
 
-        # 여기서 실제 펌프 구동 로직 실행
-        try:
-            ok = execute_mix(cmd)
-        except Exception as e:
-            log.exception(f"execute_mix error: {e}")
-            ok = False
-
+        ok = False
+        
+        # 🚩 세척 명령 처리 (DispenserController.java의 requestWash에 대응)
+        if command_type == "WASH" and cmd.get("slot") is not None:
+            slot = cmd.get("slot")
+            try:
+                # 🚩 3.0초 동안 세척하도록 설정 (필요시 시간 변경 가능)
+                ok = execute_wash(slot, wash_duration=3.0) 
+            except Exception as e:
+                log.exception(f"세척 실행 중 오류: {e}")
+                ok = False
+        
+        # 🚩 배출 명령 처리
+        elif command_type == "DISPENSE":
+            try:
+                ok = execute_mix(cmd)
+            except Exception as e:
+                log.exception(f"execute_mix error: {e}")
+                ok = False
+        
+        # 🚩 응답 상태 전송
         status = "SUCCESS" if ok else "FAIL"
 
-        # 우리가 성공/실패 결과를 다시 서버한테 알려줌
         publish_command_response(client, command_uuid, status)
 
 
@@ -81,7 +95,7 @@ def main():
     client.on_connect = on_connect
     client.on_message = on_message
 
-    # 🔁 여기서 새 브로커로 붙는다
+    # 🔁 여기서 새 브로커(IP = 35.208.61.223)로 붙는다
     client.connect(BROKER_HOST, BROKER_PORT, keepalive=60)
 
     # 메시지 계속 듣기
