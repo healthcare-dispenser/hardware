@@ -1,4 +1,3 @@
-# publisher.py
 import json
 import logging
 import paho.mqtt.client as mqtt
@@ -13,10 +12,6 @@ if not log.handlers:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
 
 def get_client() -> mqtt.Client:
-    """
-    MQTT 클라이언트 생성 (connect는 listener에서 수행)
-    필요 시 .env로 아이디/비번, TLS 옵션을 붙일 수 있음.
-    """
     client = mqtt.Client(client_id=DEVICE_UUID, clean_session=True)
     return client
 

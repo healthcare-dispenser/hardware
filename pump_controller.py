@@ -7,46 +7,38 @@ log = logging.getLogger("pump")
 if not log.handlers:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
 
-# ── 릴레이 핀 (Active-Low 가정) ──────────────────────────
+# 릴레이 핀 (Active-Low)
 PUMP_PINS = {
-    "zinc":        17,  # Relay IN1
-    "melatonin":   27,  # Relay IN2
-    "magnesium":   22,  # Relay IN3
-    "electrolyte": 23,  # Relay IN4
+    "zinc":        17,  # IN1
+    "melatonin":   27,  # IN2
+    "magnesium":   22,  # IN3
+    "electrolyte": 23,  # IN4
 }
-SLOT_PUMP_MAP = {
-    1: "zinc",
-    2: "melatonin",
-    3: "magnesium",
-    4: "electrolyte",
-}
+SLOT_PUMP_MAP = {1: "zinc", 2: "melatonin", 3: "magnesium", 4: "electrolyte"}
 
-# ── GPIO ────────────────────────────────────────────────
 def init_gpio():
     GPIO.setmode(GPIO.BCM)
     for pin in PUMP_PINS.values():
         GPIO.setup(pin, GPIO.OUT)
-        GPIO.output(pin, GPIO.HIGH)   # OFF (Active-Low)
+        GPIO.output(pin, GPIO.HIGH)   # OFF
     log.info("GPIO setup complete: Pumps are OFF")
 
 def cleanup_gpio():
     GPIO.cleanup()
     log.info("GPIO cleanup complete")
 
-# ── 보정값 ───────────────────────────────────────────────
 @dataclass
 class PumpSpec:
     name: str
-    sec_per_ml: float = 0.024  # 실측 후 조정 권장
+    sec_per_ml: float = 0.024  # 실측 후 조정
 
 PUMP_TABLE: dict[str, PumpSpec] = {
-    "zinc":        PumpSpec("zinc",        sec_per_ml=0.024),
-    "melatonin":   PumpSpec("melatonin",   sec_per_ml=0.030),
-    "magnesium":   PumpSpec("magnesium",   sec_per_ml=0.025),
-    "electrolyte": PumpSpec("electrolyte", sec_per_ml=0.022),
+    "zinc":        PumpSpec("zinc",        0.024),
+    "melatonin":   PumpSpec("melatonin",   0.030),
+    "magnesium":   PumpSpec("magnesium",   0.025),
+    "electrolyte": PumpSpec("electrolyte", 0.022),
 }
 
-# ── 저수준 제어 ─────────────────────────────────────────
 def _run_pump_gpio(channel: str, duration: float) -> None:
     if duration <= 0:
         return
@@ -57,7 +49,6 @@ def _run_pump_gpio(channel: str, duration: float) -> None:
     GPIO.output(pin, GPIO.HIGH)  # OFF
     log.info(f"[GPIO] {channel:11s} | PIN={pin} | done")
 
-# ── DISPENSE ────────────────────────────────────────────
 def execute_mix(cmd: dict) -> bool:
     channels = ["zinc", "melatonin", "magnesium", "electrolyte"]
     init_gpio()
@@ -67,8 +58,7 @@ def execute_mix(cmd: dict) -> bool:
             vol = float(cmd.get(ch, 0.0) or 0.0)
             vol = max(0.0, vol)
             if vol > 0.0 and ch in PUMP_TABLE:
-                spec = PUMP_TABLE[ch]
-                dur = vol * spec.sec_per_ml
+                dur = vol * PUMP_TABLE[ch].sec_per_ml
                 total += dur
                 _run_pump_gpio(ch, dur)
                 time.sleep(0.15)
@@ -83,7 +73,6 @@ def execute_mix(cmd: dict) -> bool:
     finally:
         cleanup_gpio()
 
-# ── WASH ────────────────────────────────────────────────
 def execute_wash(slot: int, wash_duration: float = 3.0) -> bool:
     if slot not in SLOT_PUMP_MAP:
         log.error(f"유효하지 않은 세척 슬롯: {slot}")
@@ -100,4 +89,3 @@ def execute_wash(slot: int, wash_duration: float = 3.0) -> bool:
         return False
     finally:
         cleanup_gpio()
-

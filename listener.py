@@ -17,12 +17,9 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(mes
 def on_connect(client: mqtt.Client, userdata, flags, rc):
     log.info(f"MQTT connected rc={rc}  BROKER={BROKER_HOST}:{BROKER_PORT}  UUID={DEVICE_UUID}")
     t = topics()
-    # 구독
     client.subscribe(t["sub_register_resp"], qos=1)
-    client.subscribe(t["sub_command"], qos=1)  # DISPENSE
-    client.subscribe(t["sub_wash"], qos=1)     # WASH(slot)
-
-    # 기기 등록
+    client.subscribe(t["sub_command"], qos=1)
+    client.subscribe(t["sub_wash"], qos=1)
     publish_register(client)
 
 def on_message(client: mqtt.Client, userdata, msg: mqtt.MQTTMessage):
@@ -36,12 +33,10 @@ def on_message(client: mqtt.Client, userdata, msg: mqtt.MQTTMessage):
     log.info(f"📩 RECV  {topic} {data}")
     t = topics()
 
-    # 등록 응답
     if topic == t["sub_register_resp"]:
         log.info(f"Register response: {data}")
         return
 
-    # DISPENSE 명령
     if topic == t["sub_command"]:
         cmd = parse_command_payload(data)
         command_uuid = cmd.get("commandUuid")
@@ -51,7 +46,6 @@ def on_message(client: mqtt.Client, userdata, msg: mqtt.MQTTMessage):
 
         ok = False
         try:
-            # 혹시 commandType=WASH로 올 수도 있으니 방어
             if cmd.get("commandType") == "WASH" and cmd.get("slot") is not None:
                 ok = execute_wash(int(cmd.get("slot")), wash_duration=3.0)
             else:
@@ -60,11 +54,9 @@ def on_message(client: mqtt.Client, userdata, msg: mqtt.MQTTMessage):
             log.exception(f"execute error: {e}")
             ok = False
 
-        status = "SUCCESS" if ok else "FAIL"
-        publish_command_response(client, command_uuid, status)
+        publish_command_response(client, command_uuid, "SUCCESS" if ok else "FAIL")
         return
 
-    # WASH 전용 토픽
     if topic == t["sub_wash"]:
         try:
             slot = int(data.get("slot"))
@@ -79,8 +71,7 @@ def on_message(client: mqtt.Client, userdata, msg: mqtt.MQTTMessage):
             log.exception(f"세척 실행 중 오류: {e}")
             ok = False
 
-        status = "SUCCESS" if ok else "FAIL"
-        publish_wash_response(client, slot, status)
+        publish_wash_response(client, slot, "SUCCESS" if ok else "FAIL")
         return
 
 def main():
