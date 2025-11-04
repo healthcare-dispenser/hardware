@@ -1,5 +1,3 @@
-# listener.py 파일을 깨끗한 코드로 완전히 덮어씁니다.
-cat << 'EOF' > listener.py
 # listener.py
 import json
 import logging
@@ -66,11 +64,10 @@ def on_message(client: mqtt.Client, userdata, msg: mqtt.MQTTMessage):
 
         ok = False
         
-        # 🚩 세척 명령 처리 (DispenserController.java의 requestWash에 대응)
+        # 🚩 세척 명령 처리
         if command_type == "WASH" and cmd.get("slot") is not None:
             slot = cmd.get("slot")
             try:
-                # 🚩 3.0초 동안 세척하도록 설정 (필요시 시간 변경 가능)
                 ok = execute_wash(slot, wash_duration=3.0) 
             except Exception as e:
                 log.exception(f"세척 실행 중 오류: {e}")
@@ -104,4 +101,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-EOF
